@@ -4,7 +4,7 @@ import (
 	"io/ioutil"
 	"log"
 
-	"github.com/gzuidhof/tygo/tygo"
+	"github.com/TicketOwl/tygo/tygo"
 	"gopkg.in/yaml.v2"
 )
 

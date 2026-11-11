@@ -17,6 +17,7 @@ var (
 	backquoteEscapeRegexp = regexp.MustCompile(`([$\\])`)
 	octalPrefixRegexp     = regexp.MustCompile(`^0[0-7]`)
 	unicode8Regexp        = regexp.MustCompile(`\\\\|\\U[\da-fA-F]{8}`)
+	typeArgRegexp         = regexp.MustCompile(`\{(\d+)\}`)
 )
 
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_precedence#table
@@ -207,6 +208,9 @@ func (g *PackageGenerator) writeType(
 			panic(err)
 		}
 	case *ast.IndexListExpr:
+		if g.writeGenericTypeMapping(s, t.X, t.Indices, depth, optionalParens) {
+			break
+		}
 		g.writeType(s, t.X, t, depth, false)
 		s.WriteByte('<')
 		for i, index := range t.Indices {
@@ -217,6 +221,9 @@ func (g *PackageGenerator) writeType(
 		}
 		s.WriteByte('>')
 	case *ast.IndexExpr:
+		if g.writeGenericTypeMapping(s, t.X, []ast.Expr{t.Index}, depth, optionalParens) {
+			break
+		}
 		g.writeType(s, t.X, t, depth, false)
 		s.WriteByte('<')
 		g.writeType(s, t.Index, t, depth, false)
@@ -226,6 +233,58 @@ func (g *PackageGenerator) writeType(
 		fmt.Println(err)
 		panic(err)
 	}
+}
+
+// writeGenericTypeMapping writes a generic type whose type mapping refers to
+// its type arguments as {0}, {1}, ..., e.g. `nullable.Field: "{0} | null"`
+// turns `nullable.Field[string]` into `string | null`. It returns false, and
+// writes nothing, when the type has no such mapping.
+func (g *PackageGenerator) writeGenericTypeMapping(
+	s *strings.Builder,
+	base ast.Expr,
+	typeArgs []ast.Expr,
+	depth int,
+	optionalParens bool,
+) bool {
+	selector, ok := base.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	longType := fmt.Sprintf("%s.%s", selector.X, selector.Sel)
+	mapping, ok := g.conf.TypeMappings[longType]
+	if !ok || !typeArgRegexp.MatchString(mapping) {
+		return false
+	}
+
+	renderedArgs := make([]string, len(typeArgs))
+	for index, typeArg := range typeArgs {
+		argBuilder := &strings.Builder{}
+		g.writeType(argBuilder, typeArg, nil, depth, true)
+		renderedArgs[index] = argBuilder.String()
+	}
+
+	mapped := typeArgRegexp.ReplaceAllStringFunc(mapping, func(placeholder string) string {
+		index, _ := strconv.Atoi(placeholder[1 : len(placeholder)-1])
+		if index >= len(renderedArgs) {
+			err := fmt.Errorf("type mapping %q for %s refers to %s, but it has %d type argument(s)",
+				mapping, longType, placeholder, len(renderedArgs))
+			fmt.Println(err)
+			panic(err)
+		}
+		return renderedArgs[index]
+	})
+
+	// A union or intersection needs parentheses where it's an operand, e.g. the
+	// element of an array: `(string | null)[]`.
+	wrap := optionalParens && strings.ContainsAny(mapping, "|&")
+	if wrap {
+		s.WriteByte('(')
+	}
+	s.WriteString(mapped)
+	if wrap {
+		s.WriteByte(')')
+	}
+	return true
 }
 
 func (g *PackageGenerator) writeTypeParamsFields(s *strings.Builder, fields []*ast.Field) {
@@ -326,6 +385,15 @@ func (g *PackageGenerator) writeStructFields(s *strings.Builder, fields []*ast.F
 					}
 
 					optional = jsonTag.HasOption("omitempty") || jsonTag.HasOption("omitzero")
+				}
+				bsonTag, err := tags.Get("bson")
+				if err == nil {
+					name = bsonTag.Name
+					if name == "-" {
+						continue
+					}
+
+					optional = bsonTag.HasOption("omitempty") || bsonTag.HasOption("omitzero")
 				}
 				yamlTag, err := tags.Get("yaml")
 				if err == nil {

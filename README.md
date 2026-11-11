@@ -9,7 +9,7 @@ It preserves comments, understands constants and also supports non-struct `type`
 ## Installation
 
 ```shell
-go install github.com/gzuidhof/tygo@latest
+go install github.com/TicketOwl/tygo@latest
 ```
 
 ## Example
@@ -104,7 +104,7 @@ Create a file `tygo.yaml` in which you specify which packages are to be converte
 
 ```yaml
 packages:
-  - path: "github.com/gzuidhof/tygo/examples/bookstore"
+  - path: "github.com/TicketOwl/tygo/examples/bookstore"
     type_mappings:
       time.Time: "string /* RFC3339 */"
       null.String: "null | string"
@@ -127,7 +127,7 @@ The output Typescript file will be next to the Go source files.
 config := &tygo.Config{
   Packages: []*tygo.PackageConfig{
       &tygo.PackageConfig{
-          Path: "github.com/gzuidhof/tygo/examples/bookstore",
+          Path: "github.com/TicketOwl/tygo/examples/bookstore",
       },
   },
 }
@@ -396,6 +396,61 @@ export interface ABCD<
   b: B;
   c: C;
   d: D;
+}
+```
+
+### Mapping generic types from other packages
+
+A type mapping for a generic type can refer to its type arguments as `{0}`, `{1}`, ...
+The arguments are converted first, then substituted in:
+
+```yaml
+type_mappings:
+  nullable.Field: "{0} | null"
+  util.Pair: "[{0}, {1}]"
+```
+
+```go
+// Golang input
+type Patch struct {
+	Name  nullable.Field[string]   `json:"name,omitzero"`
+	Tags  []nullable.Field[string] `json:"tags"`
+	Entry util.Pair[string, int]   `json:"entry"`
+}
+```
+
+```typescript
+// Typescript output
+export interface Patch {
+  name?: string | null;
+  tags: (string | null)[];
+  entry: [string, number /* int */];
+}
+```
+
+A mapping without placeholders (e.g. `nullable.Field: "Nullable"`) is written as a TypeScript
+generic instead: `Nullable<string>`.
+
+## BSON tags
+
+A `bson` tag names a field the same way a `json` tag does, and wins over it when a field has
+both. `bson:"-"` skips the field, and `omitempty` or `omitzero` on the `bson` tag makes it
+optional.
+
+```go
+// Golang input
+type Event struct {
+	ID       string `bson:"_id"`
+	Subtitle string `bson:"subtitle,omitempty"`
+	Secret   string `bson:"-"`
+}
+```
+
+```typescript
+// Typescript output
+export interface Event {
+  _id: string;
+  subtitle?: string;
 }
 ```
 
